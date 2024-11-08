@@ -1,0 +1,73 @@
+name: BughuntCICDCanaryTest
+
+on:
+  push:
+    branches: [ 'BughuntCICDCanaryDestination-**' ]
+  pull_request:
+    branches: [ 'BughuntCICDCanaryDestination-**' ]
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'
+        required: true
+        default: 'warning'
+      tags:
+        description: 'Test scenario tags'
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS Credentials CodeGuru
+        uses: aws-actions/configure-aws-credentials@v1
+        if: ${{ always() }}
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_IAD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_IAD }}
+          aws-region: us-east-1
+
+      - name: AWS CodeGuru Reviewer Scanner
+        uses: aws-actions/codeguru-reviewer@v1.1
+        id: codeGuruScanner
+        continue-on-error: true
+        if: ${{ always() }}
+        with:
+          name: BugBustCICDCanary-prod
+          source_path: .
+          build_path: buildFiles
+          s3_bucket: codeguru-reviewer-bugbust-cicd-github-canary-prod-us-east-1
+
+      - name: Sleep for 5 seconds for retry on failure
+        if: ${{ steps.codeGuruScanner.outcome == 'failure' }}
+        run: sleep 5s
+        shell: bash
+
+      # Retry (in case of docker pull throttling)
+      - name: AWS CodeGuru Reviewer Scanner Retry
+        uses: aws-actions/codeguru-reviewer@v1.1
+        if: ${{ steps.codeGuruScanner.outcome == 'failure' }}
+        with:
+          name: BugBustCICDCanary-prod
+          source_path: .
+          build_path: buildFiles
+          s3_bucket: codeguru-reviewer-bugbust-cicd-github-canary-prod-us-east-1
+
+      - name: Upload review result
+        if: ${{ always() }}
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: codeguru-results.sarif.json
+
+      # Add this step to assist debugging
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v2
+        with:
+          name: sarif_results
+          path: codeguru-results*.json
