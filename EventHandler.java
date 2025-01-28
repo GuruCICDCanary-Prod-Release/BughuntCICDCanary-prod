@@ -17,15 +17,19 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest.KeyVersion;
+import com.amazonaws.services.s3.model.HeadObjectRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.shipmentEvents.util.Constants;
+import software.amazon.awssdk.services.s3.waiters.S3Waiter;
 
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
 
 public class EventHandler implements RequestHandler<ScheduledEvent, String> {
+
+    private static AmazonS3 staticS3Client = AmazonS3ClientBuilder.standard().withRegion(Regions.DEFAULT_REGION).build();
 
     /**
      * Shipment events for a carrier are uploaded to separate S3 buckets based on the source of events. E.g., events originating from
@@ -74,13 +78,17 @@ public class EventHandler implements RequestHandler<ScheduledEvent, String> {
 
         EventHandler.getS3Client().putObject(Constants.SUMMARY_BUCKET, summaryUpdateName, latestStatusForTrackingNumber.toString());
 
-        long expirationTime = System.currentTimeMillis() + Duration.ofMinutes(1).toMillis();
-        while(System.currentTimeMillis() < expirationTime) {
-            if (s3Client.doesObjectExist(Constants.SUMMARY_BUCKET, summaryUpdateName)) {
-                break;
-            }
-            logger.log("waiting for file to be created " + summaryUpdateName);
-            Thread.sleep(1000);
+        final S3Waiter s3Waiter = S3Waiter.builder()
+                .overrideConfiguration(o -> o.waitTimeout(Duration.ofMinutes(1)))
+                .client(s3Client)
+                .build();
+        try {
+            s3Waiter.waitUntilObjectExists(HeadObjectRequest.builder()
+                    .bucket(Constants.SUMMARY_BUCKET)
+                    .key(summaryUpdateName)
+                    .build());
+        } catch (final Exception e){
+            logger.log(e.getMessage());
         }
 
         // Before we delete the shipment updates make sure the summary update file exists
@@ -165,8 +173,7 @@ public class EventHandler implements RequestHandler<ScheduledEvent, String> {
     }
 
     public static AmazonS3 getS3Client() {
-        return AmazonS3ClientBuilder.standard().withRegion(Regions.DEFAULT_REGION).build();
+        return EventHandler.staticS3Client;
     }
-
 
 }
